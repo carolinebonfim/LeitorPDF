@@ -36,7 +36,29 @@ if arquivo_pdf:
     with st.spinner("A transcrever..."):
         try:
             pdf_data = arquivo_pdf.read()
-            comando = "Transcreva as transações deste extrato bancário. Una descrições de várias linhas. Una Crédito/Débito em 'Valor'. Retorne APENAS um array JSON puro com chaves: 'Data', 'Transação', 'Valor'."
+           comando = """
+Age como um especialista em conciliação bancária. Transcreva este extrato seguindo estas diretrizes rigorosas:
+
+1. RECONHECIMENTO DE TRANSAÇÃO (Foto 1 - Múltiplas Colunas):
+   - Existem várias colunas que compõem a descrição (ex: 'Histórico', 'Documento', 'Origem'). 
+   - Deves concatenar (juntar) o conteúdo de TODAS as colunas amarelas de uma linha numa única célula na coluna 'Transação'.
+   - Exemplo: Se 'Histórico' diz 'PIX' e 'Origem' diz 'João', a Transação deve ser 'PIX - João'.
+
+2. TRATAMENTO DE QUEBRAS DE LINHA (Foto 2 - Descrições Longas):
+   - Se uma transação ocupar mais de uma linha física no papel, une-as. 
+   - Não cries uma nova linha na tabela se não houver uma nova data ou um novo valor associado. 
+   - Toda a descrição espalhada por várias linhas deve ser agrupada na mesma 'Transação'.
+
+3. LÓGICA DE VALORES (Sinais C/D):
+   - Se o valor vier acompanhado de 'D' ou estiver numa coluna de 'Débito', guarda-o como NEGATIVO (ex: -150.00).
+   - Se vier acompanhado de 'C' ou estiver numa coluna de 'Crédito', guarda-o como POSITIVO (ex: 150.00).
+   - Remove símbolos de moeda (R$, €), mas mantém a vírgula ou ponto decimal corretamente.
+
+4. FORMATO DE SAÍDA:
+   - Retorna APENAS um array JSON puro.
+   - Chaves: "Data", "Transação", "Valor".
+   - Ignora cabeçalhos, saldos totais e rodapés.
+"""
             
             resposta = model.generate_content([comando, {'mime_type': 'application/pdf', 'data': pdf_data}])
             
