@@ -17,7 +17,7 @@ if "GEMINI_API_KEY" not in st.secrets:
     st.stop()
 
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-model = genai.GenerativeModel('models/gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-pro')
 
 st.title("📑 Transcritor de Extratos")
 st.write("Transcreve Data, Transação e Valor automaticamente.")
