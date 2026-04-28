@@ -36,6 +36,7 @@ if arquivo_pdf:
     with st.spinner("A transcrever..."):
         try:
             pdf_data = arquivo_pdf.read()
+            
            comando = """
 Age como um especialista em conciliação bancária. Transcreva este extrato seguindo estas diretrizes rigorosas:
 
