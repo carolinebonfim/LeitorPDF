@@ -13,68 +13,76 @@ if "GEMINI_API_KEY" not in st.secrets:
     st.stop()
 
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+@st.cache_resource
+def get_model():
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            return genai.GenerativeModel(m.name, generation_config={"temperature": 0})
+    return None
+
+model = get_model()
 
 st.title("🏦 Transcritor de Extratos de Alta Capacidade")
-st.info("Este modo divide o PDF em partes para garantir que 100% das linhas sejam lidas.")
+st.write("Processamento página a página para garantir a leitura total.")
 
 arquivo_pdf = st.file_uploader("Suba o extrato em PDF", type=["pdf"])
 
-if arquivo_pdf:
-    with st.spinner("A ler PDF e a dividir em blocos..."):
+if arquivo_pdf and model:
+    with st.spinner("A processar páginas..."):
         try:
-            # Lendo o PDF página por página
             reader = PdfReader(arquivo_pdf)
             todas_transacoes = []
             
-            progresso = st.progress(0)
+            barra_progresso = st.progress(0)
             num_paginas = len(reader.pages)
 
-            for i, page in enumerate(reader.pages):
-                texto_pagina = page.extract_text()
+            for i, pagina in enumerate(reader.pages):
+                texto_extraido = pagina.extract_text()
                 
-                comando = f"""
-                Extraia as transações bancárias deste texto.
-                DATA: DD/MM/AAAA.
-                VALOR: Use vírgula (ex: 1250,45). Saídas com sinal (-).
-                TRANSAÇÃO: Descrição completa.
-                SAÍDA: Retorne APENAS um array JSON: [{"Data":"...","Transação":"...","Valor":"..."}]
-                Texto: {texto_pagina}
-                """
+                # Comando limpo para evitar erro de string
+                prompt = f"Extraia as transações deste texto para um array JSON com chaves Data, Transação e Valor. Use virgula nos decimais. Texto: {texto_extraido}"
 
-                resposta = model.generate_content(comando)
+                resposta = model.generate_content(prompt)
                 
-                # Captura e limpa o JSON de cada página
+                # Procura o JSON na resposta
                 match = re.search(r'\[.*\]', resposta.text, re.DOTALL)
                 if match:
                     try:
-                        dados_pagina = json.loads(match.group(0))
-                        todas_transacoes.extend(dados_pagina)
+                        dados = json.loads(match.group(0))
+                        todas_transacoes.extend(dados)
                     except:
-                        pass
+                        continue
                 
-                progresso.progress((i + 1) / num_paginas)
+                barra_progresso.progress((i + 1) / num_paginas)
 
             if todas_transacoes:
                 df = pd.DataFrame(todas_transacoes)
                 
-                # Padronização de Colunas
-                mapeamento = {col: col.capitalize() for col in df.columns}
-                df = df.rename(columns=mapeamento)
-                for c in ["Data", "Transação", "Valor"]:
-                    if c not in df.columns: df[c] = ""
+                # Padronizar nomes de colunas (ignora maiúsculas/minúsculas)
+                df.columns = [c.capitalize() for c in df.columns]
                 
-                df_final = df[["Data", "Transação", "Valor"]].drop_duplicates()
+                # Garantir as colunas desejadas
+                for col in ["Data", "Transação", "Valor"]:
+                    if col not in df.columns:
+                        # Tenta achar colunas com nomes parecidos
+                        for real_col in df.columns:
+                            if col.lower()[:3] in real_col.lower():
+                                df = df.rename(columns={real_col: col})
+                
+                # Filtra apenas o necessário
+                colunas_finais = [c for c in ["Data", "Transação", "Valor"] if c in df.columns]
+                df_final = df[colunas_finais].drop_duplicates()
 
-                st.success(f"Concluído! {len(df_final)} transações extraídas com sucesso.")
+                st.success(f"Concluído! {len(df_final)} linhas extraídas.")
                 st.dataframe(df_final, use_container_width=True)
 
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_final.to_excel(writer, index=False)
-                st.download_button("📥 Baixar Excel Completo", output.getvalue(), "extrato_total.xlsx")
+                st.download_button("📥 Baixar Excel Completo", output.getvalue(), "extrato_completo.xlsx")
             else:
-                st.error("Não foram encontradas transações.")
+                st.warning("Nenhuma transação identificada.")
 
         except Exception as e:
-            st.error(f"Erro: {e}")
+            st.error(f"Erro técnico: {e}")
