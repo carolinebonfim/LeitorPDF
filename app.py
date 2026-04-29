@@ -8,69 +8,71 @@ import re
 st.set_page_config(page_title="Extrator Express", layout="wide")
 
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Configure a GEMINI_API_KEY nos Secrets do Streamlit.")
+    st.error("Configure a GEMINI_API_KEY nos Secrets.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --- MÁGICA: BUSCA AUTOMÁTICA DE MODELO ---
 @st.cache_resource
 def get_model():
-    try:
-        # Lista todos os modelos que você tem permissão de usar
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                # Retorna o primeiro que encontrar (geralmente o Flash ou Pro)
-                return genai.GenerativeModel(m.name)
-    except Exception as e:
-        st.error(f"Erro ao listar modelos: {e}")
-        return None
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            return genai.GenerativeModel(m.name, generation_config={"max_output_tokens": 8192, "temperature": 0})
+    return None
 
 model = get_model()
 
-st.title("⚡ Transcritor de Extratos Express")
-st.write(f"*(Modelo ativo: {model.model_name if model else 'Nenhum'})*")
+st.title("⚡ Transcritor de Extratos Bancários")
 
 arquivo_pdf = st.file_uploader("Suba o extrato em PDF", type=["pdf"])
 
-if arquivo_pdf and model:
-    with st.spinner("Processando em alta velocidade..."):
+if arquivo_pdf:
+    with st.spinner("Processando... Aguarde a conclusão da leitura completa."):
         try:
             pdf_data = arquivo_pdf.read()
             
             comando = """
-            Extraia as transações deste extrato.
-            REGRAS:
-            1. DATA: DD/MM/AAAA.
-            2. VALOR: Use VÍRGULA como separador decimal (ex: 1250,45). 
-               - Débito/Saída: sinal de menos (ex: -50,00).
-               - Crédito/Entrada: positivo (ex: 100,00).
-            3. TRANSAÇÃO: Junte descrições de múltiplas linhas e colunas em uma só.
-            SAÍDA: Retorne APENAS o array JSON puro com chaves "Data", "Transação", "Valor".
+            Transcreva TODAS as transações deste extrato.
+            FORMATO OBRIGATÓRIO: Array JSON puro.
+            REGRAS: 
+            1. Use aspas duplas em todos os nomes e valores.
+            2. VALOR: Use vírgula (ex: "1.452,90"). Use sinal de menos para saídas.
+            3. DATA: DD/MM/AAAA.
+            4. Se o texto for cortado, termine o último objeto corretamente.
             """
 
-            resposta = model.generate_content([
-                comando,
-                {'mime_type': 'application/pdf', 'data': pdf_data}
-            ])
+            resposta = model.generate_content([comando, {'mime_type': 'application/pdf', 'data': pdf_data}])
+            texto_ia = resposta.text
             
-            match = re.search(r'\[.*\]', resposta.text, re.DOTALL)
+            # --- LIMPEZA DE ERROS DE ASPAS E VÍRGULAS ---
+            # Remove espaços extras e quebras de linha que confundem o JSON
+            json_str = re.search(r'\[.*\]', texto_ia, re.DOTALL)
             
-            if match:
-                lista_dados = json.loads(match.group(0))
-                df = pd.DataFrame(lista_dados)
-                df = df[["Data", "Transação", "Valor"]]
+            if json_str:
+                json_final = json_str.group(0)
+                
+                # TRUQUE MESTRE: Tenta converter o JSON "sujo" em uma tabela do Pandas direto
+                try:
+                    # O pandas é mais tolerante a erros de JSON que o comando json.loads
+                    df = pd.read_json(io.StringIO(json_final))
+                except:
+                    # Se o pandas falhar, tentamos uma limpeza manual de vírgulas extras
+                    json_final = re.sub(r',\s*\]', ']', json_final) 
+                    json_final = re.sub(r',\s*\}', '}', json_final)
+                    lista_dados = json.loads(json_final)
+                    df = pd.DataFrame(lista_dados)
 
-                st.success("Transcrição concluída!")
-                st.dataframe(df, use_container_width=True)
+                st.success(f"Sucesso! {len(df)} linhas processadas.")
+                st.dataframe(df[["Data", "Transação", "Valor"]], use_container_width=True)
 
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, index=False)
-                
-                st.download_button("📥 Baixar Planilha em BRL", output.getvalue(), "extrato_brl.xlsx")
+                st.download_button("📥 Baixar Excel BRL", output.getvalue(), "extrato_final.xlsx")
             else:
-                st.error("Não foi possível formatar os dados. Veja a resposta da IA:")
-                st.write(resposta.text)
+                st.error("A IA não gerou uma tabela válida.")
+                st.code(texto_ia)
+
         except Exception as e:
-            st.error(f"Erro: {e}")
+            st.error(f"Erro de processamento: {e}")
+            st.info("Dica: Se o arquivo for muito grande, tente processar poucas páginas por vez.")
