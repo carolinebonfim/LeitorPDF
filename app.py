@@ -27,52 +27,63 @@ st.title("⚡ Transcritor de Extratos Bancários")
 arquivo_pdf = st.file_uploader("Suba o extrato em PDF", type=["pdf"])
 
 if arquivo_pdf:
-    with st.spinner("Processando... Aguarde a conclusão da leitura completa."):
+    with st.spinner("Processando..."):
         try:
             pdf_data = arquivo_pdf.read()
             
             comando = """
-            Transcreva TODAS as transações deste extrato.
-            FORMATO OBRIGATÓRIO: Array JSON puro.
+            Transcreva as transações deste extrato para um array JSON.
+            Campos: "Data", "Transação", "Valor".
             REGRAS: 
-            1. Use aspas duplas em todos os nomes e valores.
-            2. VALOR: Use vírgula (ex: "1.452,90"). Use sinal de menos para saídas.
-            3. DATA: DD/MM/AAAA.
-            4. Se o texto for cortado, termine o último objeto corretamente.
+            1. VALOR: Use vírgula (ex: "1.452,90"). Use sinal de menos para saídas.
+            2. DATA: DD/MM/AAAA.
+            3. TRANSAÇÃO: Junte as descrições longas.
+            Retorne APENAS o JSON.
             """
 
             resposta = model.generate_content([comando, {'mime_type': 'application/pdf', 'data': pdf_data}])
             texto_ia = resposta.text
             
-            # --- LIMPEZA DE ERROS DE ASPAS E VÍRGULAS ---
-            # Remove espaços extras e quebras de linha que confundem o JSON
-            json_str = re.search(r'\[.*\]', texto_ia, re.DOTALL)
+            match = re.search(r'\[.*\]', texto_ia, re.DOTALL)
             
-            if json_str:
-                json_final = json_str.group(0)
-                
-                # TRUQUE MESTRE: Tenta converter o JSON "sujo" em uma tabela do Pandas direto
+            if match:
+                json_final = match.group(0)
+                # Tenta ler o JSON
                 try:
-                    # O pandas é mais tolerante a erros de JSON que o comando json.loads
                     df = pd.read_json(io.StringIO(json_final))
                 except:
-                    # Se o pandas falhar, tentamos uma limpeza manual de vírgulas extras
-                    json_final = re.sub(r',\s*\]', ']', json_final) 
-                    json_final = re.sub(r',\s*\}', '}', json_final)
                     lista_dados = json.loads(json_final)
                     df = pd.DataFrame(lista_dados)
 
-                st.success(f"Sucesso! {len(df)} linhas processadas.")
-                st.dataframe(df[["Data", "Transação", "Valor"]], use_container_width=True)
+                # --- MÁGICA: PADRONIZAÇÃO DE COLUNAS ---
+                # Isso converte qualquer nome que a IA inventou para o seu padrão
+                mapeamento = {}
+                for col in df.columns:
+                    col_norm = col.lower().strip()
+                    if 'dat' in col_norm: mapeamento[col] = "Data"
+                    elif 'trans' in col_norm or 'desc' in col_norm or 'hist' in col_norm: mapeamento[col] = "Transação"
+                    elif 'val' in col_norm: mapeamento[col] = "Valor"
+                
+                df = df.rename(columns=mapeamento)
+
+                # Se mesmo assim faltar alguma, a gente cria vazia para não dar erro
+                for esperado in ["Data", "Transação", "Valor"]:
+                    if esperado not in df.columns:
+                        df[esperado] = ""
+
+                # Ordena e exibe apenas as 3 colunas desejadas
+                df_final = df[["Data", "Transação", "Valor"]]
+
+                st.success(f"Sucesso! {len(df_final)} linhas processadas.")
+                st.dataframe(df_final, use_container_width=True)
 
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, index=False)
+                    df_final.to_excel(writer, index=False)
                 st.download_button("📥 Baixar Excel BRL", output.getvalue(), "extrato_final.xlsx")
             else:
-                st.error("A IA não gerou uma tabela válida.")
+                st.error("Não foi possível localizar os dados.")
                 st.code(texto_ia)
 
         except Exception as e:
-            st.error(f"Erro de processamento: {e}")
-            st.info("Dica: Se o arquivo for muito grande, tente processar poucas páginas por vez.")
+            st.error(f"Erro: {e}")
